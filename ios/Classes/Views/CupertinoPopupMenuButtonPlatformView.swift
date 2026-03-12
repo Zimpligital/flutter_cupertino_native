@@ -12,8 +12,8 @@ class CupertinoPopupMenuButtonPlatformView: NSObject, FlutterPlatformView {
   private var dividers: [Bool] = []
   private var enabled: [Bool] = []
   private var checked: [Bool] = []
-  private var itemSizes: [NSNumber] = []
-  private var itemColors: [NSNumber] = []
+  private var itemSizes: [NSNumber?] = []
+  private var itemColors: [NSNumber?] = []
   private var itemModes: [String?] = []
   private var itemPalettes: [[NSNumber]] = []
   private var itemGradients: [NSNumber?] = []
@@ -24,6 +24,7 @@ class CupertinoPopupMenuButtonPlatformView: NSObject, FlutterPlatformView {
   private var btnIconMode: String? = nil
   private var btnIconPalette: [UIColor] = []
   private var isTransparentOverlay: Bool = false
+  private var blurOverlay: UIVisualEffectView?
 
   init(frame: CGRect, viewId: Int64, args: Any?, messenger: FlutterBinaryMessenger) {
     self.channel = FlutterMethodChannel(name: "CupertinoNativePopupMenuButton_\(viewId)", binaryMessenger: messenger)
@@ -43,14 +44,16 @@ class CupertinoPopupMenuButtonPlatformView: NSObject, FlutterPlatformView {
     var dividers: [NSNumber] = []
     var enabled: [NSNumber] = []
     var checkedNums: [NSNumber] = []
-    var sizes: [NSNumber] = []
-    var colors: [NSNumber] = []
+    var sizes: [NSNumber?] = []
+    var colors: [NSNumber?] = []
     var buttonIconMode: String? = nil
     var buttonIconPalette: [NSNumber] = []
     var transparentOverlay: Bool = false
+    var blurred: Bool = false
 
     if let dict = args as? [String: Any] {
       if let t = dict["transparentOverlay"] as? NSNumber { transparentOverlay = t.boolValue }
+      if let b = dict["blurred"] as? NSNumber { blurred = b.boolValue }
       if let t = dict["buttonTitle"] as? String { title = t }
       if let s = dict["buttonIconName"] as? String { iconName = s }
       if let s = dict["buttonIconSize"] as? NSNumber { iconSize = CGFloat(truncating: s) }
@@ -64,11 +67,11 @@ class CupertinoPopupMenuButtonPlatformView: NSObject, FlutterPlatformView {
       dividers = (dict["isDivider"] as? [NSNumber]) ?? []
       enabled = (dict["enabled"] as? [NSNumber]) ?? []
       checkedNums = (dict["checked"] as? [NSNumber]) ?? []
-      sizes = (dict["sfSymbolSizes"] as? [NSNumber]) ?? []
-      colors = (dict["sfSymbolColors"] as? [NSNumber]) ?? []
-      if let modes = dict["sfSymbolRenderingModes"] as? [String?] { self.itemModes = modes }
+      sizes = Self.parseNullableNumbers(dict["sfSymbolSizes"])
+      colors = Self.parseNullableNumbers(dict["sfSymbolColors"])
+      self.itemModes = Self.parseNullableStrings(dict["sfSymbolRenderingModes"])
       if let palettes = dict["sfSymbolPaletteColors"] as? [[NSNumber]] { self.itemPalettes = palettes }
-      if let gradients = dict["sfSymbolGradientEnabled"] as? [NSNumber?] { self.itemGradients = gradients }
+      self.itemGradients = Self.parseNullableNumbers(dict["sfSymbolGradientEnabled"])
       if let m = dict["buttonIconRenderingMode"] as? String { buttonIconMode = m }
       if let pal = dict["buttonIconPaletteColors"] as? [NSNumber] { buttonIconPalette = pal }
     }
@@ -117,6 +120,7 @@ class CupertinoPopupMenuButtonPlatformView: NSObject, FlutterPlatformView {
     self.isRoundButton = makeRound
     applyButtonStyle(buttonStyle: buttonStyle, round: makeRound)
     currentButtonStyle = buttonStyle
+    if blurred { setBlurred(true) }
     
     // Skip button content setup when in transparent overlay mode
     if !transparentOverlay {
@@ -175,13 +179,13 @@ class CupertinoPopupMenuButtonPlatformView: NSObject, FlutterPlatformView {
           self.dividers = ((args["isDivider"] as? [NSNumber]) ?? []).map { $0.boolValue }
           self.enabled = ((args["enabled"] as? [NSNumber]) ?? []).map { $0.boolValue }
           self.checked = ((args["checked"] as? [NSNumber]) ?? []).map { $0.boolValue }
-          let sizes = (args["sfSymbolSizes"] as? [NSNumber]) ?? []
-          let colors = (args["sfSymbolColors"] as? [NSNumber]) ?? []
+          let sizes = Self.parseNullableNumbers(args["sfSymbolSizes"])
+          let colors = Self.parseNullableNumbers(args["sfSymbolColors"])
           self.itemSizes = sizes
           self.itemColors = colors
-          self.itemModes = (args["sfSymbolRenderingModes"] as? [String?]) ?? []
+          self.itemModes = Self.parseNullableStrings(args["sfSymbolRenderingModes"])
           self.itemPalettes = (args["sfSymbolPaletteColors"] as? [[NSNumber]]) ?? []
-          self.itemGradients = (args["sfSymbolGradientEnabled"] as? [NSNumber?]) ?? []
+          self.itemGradients = Self.parseNullableNumbers(args["sfSymbolGradientEnabled"])
           self.rebuildMenu(defaultSizes: sizes, defaultColors: colors)
           result(nil)
         } else { result(FlutterError(code: "bad_args", message: "Missing items", details: nil)) }
@@ -236,6 +240,11 @@ class CupertinoPopupMenuButtonPlatformView: NSObject, FlutterPlatformView {
           self.button.isHighlighted = p.boolValue
           result(nil)
         } else { result(FlutterError(code: "bad_args", message: "Missing pressed", details: nil)) }
+      case "setBlur":
+        if let args = call.arguments as? [String: Any],
+           let b = (args["blurred"] as? NSNumber)?.boolValue {
+          self.setBlurred(b); result(nil)
+        } else { result(FlutterError(code: "bad_args", message: "Missing blurred", details: nil)) }
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -244,7 +253,21 @@ class CupertinoPopupMenuButtonPlatformView: NSObject, FlutterPlatformView {
 
   func view() -> UIView { container }
 
-  private func rebuildMenu(defaultSizes: [NSNumber]? = nil, defaultColors: [NSNumber]? = nil) {
+  private func setBlurred(_ blurred: Bool) {
+    if blurred {
+      guard blurOverlay == nil else { return }
+      let overlay = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+      overlay.frame = container.bounds
+      overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+      container.addSubview(overlay)
+      blurOverlay = overlay
+    } else {
+      blurOverlay?.removeFromSuperview()
+      blurOverlay = nil
+    }
+  }
+
+  private func rebuildMenu(defaultSizes: [NSNumber?]? = nil, defaultColors: [NSNumber?]? = nil) {
     // iOS 14+ native menu
     if #available(iOS 14.0, *) {
       // Build grouped actions; inline groups render with native separators.
@@ -260,16 +283,16 @@ class CupertinoPopupMenuButtonPlatformView: NSObject, FlutterPlatformView {
         let title = i < labels.count ? labels[i] : ""
         var image: UIImage? = nil
         if i < symbols.count, !symbols[i].isEmpty { image = UIImage(systemName: symbols[i]) }
-        if let sizes = defaultSizes, i < sizes.count {
-          let s = CGFloat(truncating: sizes[i])
+        if let sizes = defaultSizes, i < sizes.count, let sn = sizes[i] {
+          let s = CGFloat(truncating: sn)
           if s > 0, let img = image { image = img.applyingSymbolConfiguration(UIImage.SymbolConfiguration(pointSize: s)) }
         }
         // Rendering mode: prefer explicit per-item mode when provided; else fallback to color
         if i < self.itemModes.count, let mode = self.itemModes[i] {
           switch mode {
           case "hierarchical":
-            if #available(iOS 15.0, *), let colors = defaultColors, i < colors.count {
-              let c = Self.colorFromARGB(colors[i].intValue)
+            if #available(iOS 15.0, *), let colors = defaultColors, i < colors.count, let cn = colors[i] {
+              let c = Self.colorFromARGB(cn.intValue)
               if let img = image {
                 let cfg = UIImage.SymbolConfiguration(hierarchicalColor: c)
                 image = img.applyingSymbolConfiguration(cfg)
@@ -292,8 +315,8 @@ class CupertinoPopupMenuButtonPlatformView: NSObject, FlutterPlatformView {
             }
           case "monochrome":
             // Explicit monochrome: use direct tint color if provided
-            if let colors = defaultColors, i < colors.count {
-              let c = Self.colorFromARGB(colors[i].intValue)
+            if let colors = defaultColors, i < colors.count, let cn = colors[i] {
+              let c = Self.colorFromARGB(cn.intValue)
               if let img = image, #available(iOS 13.0, *) {
                 image = img.withTintColor(c, renderingMode: .alwaysOriginal)
               }
@@ -301,8 +324,8 @@ class CupertinoPopupMenuButtonPlatformView: NSObject, FlutterPlatformView {
           default:
             break
           }
-        } else if let colors = defaultColors, i < colors.count {
-          let c = Self.colorFromARGB(colors[i].intValue)
+        } else if let colors = defaultColors, i < colors.count, let cn = colors[i] {
+          let c = Self.colorFromARGB(cn.intValue)
           if let img = image, #available(iOS 13.0, *) {
             image = img.withTintColor(c, renderingMode: .alwaysOriginal)
           }
@@ -366,6 +389,16 @@ class CupertinoPopupMenuButtonPlatformView: NSObject, FlutterPlatformView {
       responder = r.next
     }
     return nil
+  }
+
+  private static func parseNullableNumbers(_ value: Any?) -> [NSNumber?] {
+    guard let arr = value as? [Any] else { return [] }
+    return arr.map { $0 is NSNull ? nil : $0 as? NSNumber }
+  }
+
+  private static func parseNullableStrings(_ value: Any?) -> [String?] {
+    guard let arr = value as? [Any] else { return [] }
+    return arr.map { $0 is NSNull ? nil : $0 as? String }
   }
 
   private static func colorFromARGB(_ argb: Int) -> UIColor {

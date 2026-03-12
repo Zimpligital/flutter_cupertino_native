@@ -10,19 +10,30 @@ class CupertinoTabBarPlatformView: NSObject, FlutterPlatformView, UITabBarDelega
   private var isSplit: Bool = false
   private var rightCountVal: Int = 1
   private var currentLabels: [String] = []
-  private var currentSymbols: [String] = []
+  private var currentActiveSymbols: [String] = []
+  private var currentInactiveSymbols: [String] = []
+  private var currentActiveColors: [NSNumber?] = []
+  private var currentInactiveColors: [NSNumber?] = []
+  private var currentActiveTextColors: [NSNumber?] = []
+  private var currentInactiveTextColors: [NSNumber?] = []
+  private var currentBadges: [Int?] = []
+  private var currentSelectedIndex: Int = 0
   private var leftInsetVal: CGFloat = 0
   private var rightInsetVal: CGFloat = 0
   private var splitSpacingVal: CGFloat = 8
+  private var blurOverlay: UIVisualEffectView?
 
   init(frame: CGRect, viewId: Int64, args: Any?, messenger: FlutterBinaryMessenger) {
     self.channel = FlutterMethodChannel(name: "CupertinoNativeTabBar_\(viewId)", binaryMessenger: messenger)
     self.container = UIView(frame: frame)
 
     var labels: [String] = []
-    var symbols: [String] = []
-    var sizes: [NSNumber] = [] // ignored; use system metrics
-    var colors: [NSNumber] = [] // ignored; use tintColor
+    var activeSymbols: [String] = []
+    var inactiveSymbols: [String] = []
+    var activeColors: [NSNumber?] = []
+    var inactiveColors: [NSNumber?] = []
+    var activeTextColors: [NSNumber?] = []
+    var inactiveTextColors: [NSNumber?] = []
     var selectedIndex: Int = 0
     var isDark: Bool = false
     var tint: UIColor? = nil
@@ -31,12 +42,19 @@ class CupertinoTabBarPlatformView: NSObject, FlutterPlatformView, UITabBarDelega
     var rightCount: Int = 1
     var leftInset: CGFloat = 0
     var rightInset: CGFloat = 0
+    var badges: [Int?] = []
+    var blurred: Bool = false
 
     if let dict = args as? [String: Any] {
       labels = (dict["labels"] as? [String]) ?? []
-      symbols = (dict["sfSymbols"] as? [String]) ?? []
-      sizes = (dict["sfSymbolSizes"] as? [NSNumber]) ?? []
-      colors = (dict["sfSymbolColors"] as? [NSNumber]) ?? []
+      let fallbackSymbols = (dict["sfSymbols"] as? [String]) ?? []
+      activeSymbols = (dict["activeSymbols"] as? [String]) ?? fallbackSymbols
+      inactiveSymbols = (dict["inactiveSymbols"] as? [String]) ?? fallbackSymbols
+      activeColors = (dict["activeColors"] as? [NSNumber?]) ?? []
+      inactiveColors = (dict["inactiveColors"] as? [NSNumber?]) ?? []
+      activeTextColors = (dict["activeTextColors"] as? [NSNumber?]) ?? []
+      inactiveTextColors = (dict["inactiveTextColors"] as? [NSNumber?]) ?? []
+      badges = (dict["badges"] as? [NSNumber?])?.map { $0?.intValue } ?? []
       if let v = dict["selectedIndex"] as? NSNumber { selectedIndex = v.intValue }
       if let v = dict["isDark"] as? NSNumber { isDark = v.boolValue }
       if let style = dict["style"] as? [String: Any] {
@@ -46,6 +64,7 @@ class CupertinoTabBarPlatformView: NSObject, FlutterPlatformView, UITabBarDelega
       if let s = dict["split"] as? NSNumber { split = s.boolValue }
       if let rc = dict["rightCount"] as? NSNumber { rightCount = rc.intValue }
       if let sp = dict["splitSpacing"] as? NSNumber { splitSpacingVal = CGFloat(truncating: sp) }
+      if let b = dict["blurred"] as? NSNumber { blurred = b.boolValue }
       // content insets controlled by Flutter padding; keep zero here
     }
 
@@ -61,14 +80,26 @@ class CupertinoTabBarPlatformView: NSObject, FlutterPlatformView, UITabBarDelega
     func buildItems(_ range: Range<Int>) -> [UITabBarItem] {
       var items: [UITabBarItem] = []
       for i in range {
-        var image: UIImage? = nil
-        if i < symbols.count { image = UIImage(systemName: symbols[i]) }
+        let activeSym = i < activeSymbols.count ? activeSymbols[i] : ""
+        let inactiveSym = i < inactiveSymbols.count ? inactiveSymbols[i] : ""
+        var activeImage: UIImage? = activeSym.isEmpty ? nil : UIImage(systemName: activeSym)
+        var inactiveImage: UIImage? = inactiveSym.isEmpty ? nil : UIImage(systemName: inactiveSym)
+        if #available(iOS 13.0, *) {
+          if let n = (i < activeColors.count ? activeColors[i] : nil) {
+            activeImage = activeImage?.withTintColor(Self.colorFromARGB(n.intValue), renderingMode: .alwaysOriginal)
+          }
+          if let n = (i < inactiveColors.count ? inactiveColors[i] : nil) {
+            inactiveImage = inactiveImage?.withTintColor(Self.colorFromARGB(n.intValue), renderingMode: .alwaysOriginal)
+          }
+        }
         let title = (i < labels.count) ? labels[i] : nil
-        items.append(UITabBarItem(title: title, image: image, selectedImage: image))
+        let item = UITabBarItem(title: title, image: inactiveImage, selectedImage: activeImage)
+        if i < badges.count, let b = badges[i] { item.badgeValue = String(b) }
+        items.append(item)
       }
       return items
     }
-    let count = max(labels.count, symbols.count)
+    let count = max(labels.count, max(activeSymbols.count, inactiveSymbols.count))
     if split && count > rightCount {
       let leftEnd = count - rightCount
       let left = UITabBar(frame: .zero)
@@ -147,9 +178,18 @@ class CupertinoTabBarPlatformView: NSObject, FlutterPlatformView, UITabBarDelega
     self.isSplit = split
     self.rightCountVal = rightCount
     self.currentLabels = labels
-    self.currentSymbols = symbols
+    self.currentActiveSymbols = activeSymbols
+    self.currentInactiveSymbols = inactiveSymbols
+    self.currentActiveColors = activeColors
+    self.currentInactiveColors = inactiveColors
+    self.currentActiveTextColors = activeTextColors
+    self.currentInactiveTextColors = inactiveTextColors
+    self.currentBadges = badges
+    self.currentSelectedIndex = selectedIndex
     self.leftInsetVal = leftInset
     self.rightInsetVal = rightInset
+    applyLabelColors(selectedIndex: selectedIndex)
+    if blurred { setBlurred(true) }
 channel.setMethodCallHandler { [weak self] call, result in
       guard let self = self else { result(nil); return }
       switch call.method {
@@ -163,21 +203,45 @@ channel.setMethodCallHandler { [weak self] call, result in
       case "setItems":
         if let args = call.arguments as? [String: Any] {
           let labels = (args["labels"] as? [String]) ?? []
-          let symbols = (args["sfSymbols"] as? [String]) ?? []
+          let fallbackSymbols = (args["sfSymbols"] as? [String]) ?? []
+          let activeSymbols = (args["activeSymbols"] as? [String]) ?? fallbackSymbols
+          let inactiveSymbols = (args["inactiveSymbols"] as? [String]) ?? fallbackSymbols
+          let activeColors = (args["activeColors"] as? [NSNumber?]) ?? []
+          let inactiveColors = (args["inactiveColors"] as? [NSNumber?]) ?? []
+          let activeTextColors = (args["activeTextColors"] as? [NSNumber?]) ?? []
+          let inactiveTextColors = (args["inactiveTextColors"] as? [NSNumber?]) ?? []
           let selectedIndex = (args["selectedIndex"] as? NSNumber)?.intValue ?? 0
           self.currentLabels = labels
-          self.currentSymbols = symbols
+          self.currentActiveSymbols = activeSymbols
+          self.currentInactiveSymbols = inactiveSymbols
+          self.currentActiveColors = activeColors
+          self.currentInactiveColors = inactiveColors
+          self.currentActiveTextColors = activeTextColors
+          self.currentInactiveTextColors = inactiveTextColors
+          let badges = self.currentBadges
           func buildItems(_ range: Range<Int>) -> [UITabBarItem] {
             var items: [UITabBarItem] = []
             for i in range {
-              var image: UIImage? = nil
-              if i < symbols.count { image = UIImage(systemName: symbols[i]) }
+              let activeSym = i < activeSymbols.count ? activeSymbols[i] : ""
+              let inactiveSym = i < inactiveSymbols.count ? inactiveSymbols[i] : ""
+              var activeImage: UIImage? = activeSym.isEmpty ? nil : UIImage(systemName: activeSym)
+              var inactiveImage: UIImage? = inactiveSym.isEmpty ? nil : UIImage(systemName: inactiveSym)
+              if #available(iOS 13.0, *) {
+                if let n = (i < activeColors.count ? activeColors[i] : nil) {
+                  activeImage = activeImage?.withTintColor(Self.colorFromARGB(n.intValue), renderingMode: .alwaysOriginal)
+                }
+                if let n = (i < inactiveColors.count ? inactiveColors[i] : nil) {
+                  inactiveImage = inactiveImage?.withTintColor(Self.colorFromARGB(n.intValue), renderingMode: .alwaysOriginal)
+                }
+              }
               let title = (i < labels.count) ? labels[i] : nil
-              items.append(UITabBarItem(title: title, image: image, selectedImage: image))
+              let item = UITabBarItem(title: title, image: inactiveImage, selectedImage: activeImage)
+              if i < badges.count, let b = badges[i] { item.badgeValue = String(b) }
+              items.append(item)
             }
             return items
           }
-          let count = max(labels.count, symbols.count)
+          let count = max(labels.count, max(activeSymbols.count, inactiveSymbols.count))
           if self.isSplit && count > self.rightCountVal, let left = self.tabBarLeft, let right = self.tabBarRight {
             let leftEnd = count - self.rightCountVal
             left.items = buildItems(0..<leftEnd)
@@ -187,10 +251,14 @@ channel.setMethodCallHandler { [weak self] call, result in
               let idx = selectedIndex - leftEnd
               if idx >= 0 && idx < items.count { right.selectedItem = items[idx]; left.selectedItem = nil }
             }
+            self.currentSelectedIndex = selectedIndex
+            self.applyLabelColors(selectedIndex: selectedIndex)
             result(nil)
           } else if let bar = self.tabBar {
             bar.items = buildItems(0..<count)
             if let items = bar.items, selectedIndex >= 0, selectedIndex < items.count { bar.selectedItem = items[selectedIndex] }
+            self.currentSelectedIndex = selectedIndex
+            self.applyLabelColors(selectedIndex: selectedIndex)
             result(nil)
           } else {
             result(FlutterError(code: "state_error", message: "Tab bars not initialized", details: nil))
@@ -210,7 +278,11 @@ channel.setMethodCallHandler { [weak self] call, result in
           self.tabBarLeft?.removeFromSuperview(); self.tabBarLeft = nil
           self.tabBarRight?.removeFromSuperview(); self.tabBarRight = nil
           let labels = self.currentLabels
-          let symbols = self.currentSymbols
+          let activeSymbols = self.currentActiveSymbols
+          let inactiveSymbols = self.currentInactiveSymbols
+          let activeColors = self.currentActiveColors
+          let inactiveColors = self.currentInactiveColors
+          let badges = self.currentBadges
           let appearance: UITabBarAppearance? = {
             if #available(iOS 13.0, *) { let ap = UITabBarAppearance(); ap.configureWithDefaultBackground(); return ap }
             return nil
@@ -218,14 +290,26 @@ channel.setMethodCallHandler { [weak self] call, result in
           func buildItems(_ range: Range<Int>) -> [UITabBarItem] {
             var items: [UITabBarItem] = []
             for i in range {
-              var image: UIImage? = nil
-              if i < symbols.count { image = UIImage(systemName: symbols[i]) }
+              let activeSym = i < activeSymbols.count ? activeSymbols[i] : ""
+              let inactiveSym = i < inactiveSymbols.count ? inactiveSymbols[i] : ""
+              var activeImage: UIImage? = activeSym.isEmpty ? nil : UIImage(systemName: activeSym)
+              var inactiveImage: UIImage? = inactiveSym.isEmpty ? nil : UIImage(systemName: inactiveSym)
+              if #available(iOS 13.0, *) {
+                if let n = (i < activeColors.count ? activeColors[i] : nil) {
+                  activeImage = activeImage?.withTintColor(Self.colorFromARGB(n.intValue), renderingMode: .alwaysOriginal)
+                }
+                if let n = (i < inactiveColors.count ? inactiveColors[i] : nil) {
+                  inactiveImage = inactiveImage?.withTintColor(Self.colorFromARGB(n.intValue), renderingMode: .alwaysOriginal)
+                }
+              }
               let title = (i < labels.count) ? labels[i] : nil
-              items.append(UITabBarItem(title: title, image: image, selectedImage: image))
+              let item = UITabBarItem(title: title, image: inactiveImage, selectedImage: activeImage)
+              if i < badges.count, let b = badges[i] { item.badgeValue = String(b) }
+              items.append(item)
             }
             return items
           }
-          let count = max(labels.count, symbols.count)
+          let count = max(labels.count, max(activeSymbols.count, inactiveSymbols.count))
           if split && count > rightCount {
             let leftEnd = count - rightCount
             let left = UITabBar(frame: .zero)
@@ -284,6 +368,8 @@ channel.setMethodCallHandler { [weak self] call, result in
             ])
           }
           self.isSplit = split; self.rightCountVal = rightCount; self.leftInsetVal = leftInset; self.rightInsetVal = rightInset
+          self.currentSelectedIndex = selectedIndex
+          self.applyLabelColors(selectedIndex: selectedIndex)
           result(nil)
         } else { result(FlutterError(code: "bad_args", message: "Missing layout", details: nil)) }
       case "setSelectedIndex":
@@ -291,6 +377,8 @@ channel.setMethodCallHandler { [weak self] call, result in
           // Single bar
           if let bar = self.tabBar, let items = bar.items, idx >= 0, idx < items.count {
             bar.selectedItem = items[idx]
+            self.currentSelectedIndex = idx
+            self.applyLabelColors(selectedIndex: idx)
             result(nil)
             return
           }
@@ -299,6 +387,8 @@ channel.setMethodCallHandler { [weak self] call, result in
             if idx < leftItems.count, idx >= 0 {
               left.selectedItem = leftItems[idx]
               self.tabBarRight?.selectedItem = nil
+              self.currentSelectedIndex = idx
+              self.applyLabelColors(selectedIndex: idx)
               result(nil)
               return
             }
@@ -307,6 +397,8 @@ channel.setMethodCallHandler { [weak self] call, result in
               if ridx >= 0, ridx < rightItems.count {
                 right.selectedItem = rightItems[ridx]
                 self.tabBarLeft?.selectedItem = nil
+                self.currentSelectedIndex = idx
+                self.applyLabelColors(selectedIndex: idx)
                 result(nil)
                 return
               }
@@ -335,6 +427,29 @@ channel.setMethodCallHandler { [weak self] call, result in
           if #available(iOS 13.0, *) { self.container.overrideUserInterfaceStyle = isDark ? .dark : .light }
           result(nil)
         } else { result(FlutterError(code: "bad_args", message: "Missing isDark", details: nil)) }
+      case "setBadges":
+        if let args = call.arguments as? [String: Any] {
+          let newBadges: [Int?] = (args["badges"] as? [NSNumber?])?.map { $0?.intValue } ?? []
+          self.currentBadges = newBadges
+          func applyBadge(to items: [UITabBarItem]?, offset: Int) {
+            guard let items = items else { return }
+            for (idx, item) in items.enumerated() {
+              let i = idx + offset
+              if i < newBadges.count, let b = newBadges[i] { item.badgeValue = String(b) }
+              else { item.badgeValue = nil }
+            }
+          }
+          applyBadge(to: self.tabBar?.items, offset: 0)
+          let leftCount = self.tabBarLeft?.items?.count ?? 0
+          applyBadge(to: self.tabBarLeft?.items, offset: 0)
+          applyBadge(to: self.tabBarRight?.items, offset: leftCount)
+          result(nil)
+        } else { result(FlutterError(code: "bad_args", message: "Missing badges", details: nil)) }
+      case "setBlur":
+        if let args = call.arguments as? [String: Any],
+           let b = (args["blurred"] as? NSNumber)?.boolValue {
+          self.setBlurred(b); result(nil)
+        } else { result(FlutterError(code: "bad_args", message: "Missing blurred", details: nil)) }
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -342,6 +457,47 @@ channel.setMethodCallHandler { [weak self] call, result in
   }
 
   func view() -> UIView { container }
+
+  private func setBlurred(_ blurred: Bool) {
+    if blurred {
+      guard blurOverlay == nil else { return }
+      let overlay = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+      overlay.frame = container.bounds
+      overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+      container.addSubview(overlay)
+      blurOverlay = overlay
+    } else {
+      blurOverlay?.removeFromSuperview()
+      blurOverlay = nil
+    }
+  }
+
+  private func applyLabelColors(selectedIndex: Int) {
+    // Since icons use .alwaysOriginal, tintColor only affects the selected label text.
+    // unselectedItemTintColor affects all unselected label text.
+    // activeTextColors takes priority over activeColors for label text.
+    let activeColor: UIColor? =
+      (selectedIndex < currentActiveTextColors.count ? currentActiveTextColors[selectedIndex] : nil)
+        .map { Self.colorFromARGB($0.intValue) }
+      ?? (selectedIndex < currentActiveColors.count ? currentActiveColors[selectedIndex] : nil)
+        .map { Self.colorFromARGB($0.intValue) }
+    let inactiveColor: UIColor? =
+      currentInactiveTextColors.compactMap { $0 }.first.map { Self.colorFromARGB($0.intValue) }
+      ?? currentInactiveColors.compactMap { $0 }.first.map { Self.colorFromARGB($0.intValue) }
+    if let left = tabBarLeft, let right = tabBarRight {
+      let leftCount = left.items?.count ?? 0
+      if let c = activeColor {
+        if selectedIndex < leftCount { left.tintColor = c } else { right.tintColor = c }
+      }
+      if #available(iOS 10.0, *), let c = inactiveColor {
+        left.unselectedItemTintColor = c
+        right.unselectedItemTintColor = c
+      }
+    } else if let bar = tabBar {
+      if let c = activeColor { bar.tintColor = c }
+      if #available(iOS 10.0, *), let c = inactiveColor { bar.unselectedItemTintColor = c }
+    }
+  }
 
   func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
     // Single bar case

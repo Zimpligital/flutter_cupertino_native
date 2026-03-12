@@ -21,6 +21,7 @@ class CNPopupMenuItem extends CNPopupMenuEntry {
     this.icon,
     this.enabled = true,
     this.checked = false,
+    this.labelColor,
   });
 
   /// Display label for the item.
@@ -34,6 +35,9 @@ class CNPopupMenuItem extends CNPopupMenuEntry {
 
   /// Whether the item should display a check mark.
   final bool checked;
+
+  /// Optional label text color. Supported on macOS; ignored on iOS.
+  final Color? labelColor;
 }
 
 /// A visual divider between popup menu items.
@@ -58,13 +62,15 @@ class CNPopupMenuButton extends StatefulWidget {
     required this.items,
     required this.onSelected,
     this.tint,
+     this.blurred = false,
   }) : buttonLabel = null,
        buttonIcon = null,
        width = null,
        round = false,
        height = null,
        shrinkWrap = false,
-       buttonStyle = CNButtonStyle.plain;
+       buttonStyle = CNButtonStyle.plain,
+       buttonLabelStyle = null;
 
   /// Creates a text-labeled popup menu button.
   const CNPopupMenuButton.label({
@@ -76,6 +82,8 @@ class CNPopupMenuButton extends StatefulWidget {
     this.height = 32.0,
     this.shrinkWrap = false,
     this.buttonStyle = CNButtonStyle.plain,
+    this.buttonLabelStyle,
+    this.blurred = false,
   }) : child = null,
        buttonIcon = null,
        width = null,
@@ -90,12 +98,14 @@ class CNPopupMenuButton extends StatefulWidget {
     this.tint,
     double size = 44.0, // button diameter (width = height)
     this.buttonStyle = CNButtonStyle.glass,
+    this.blurred = false,
   }) : child = null,
        buttonLabel = null,
        round = true,
        width = size,
        height = size,
        shrinkWrap = false,
+       buttonLabelStyle = null,
        super();
 
   /// Custom child widget to display (non-null when using child constructor).
@@ -129,6 +139,14 @@ class CNPopupMenuButton extends StatefulWidget {
   /// Visual style to apply to the button.
   final CNButtonStyle buttonStyle;
 
+  /// Optional text style for the button label. Applied in the Flutter fallback on non-Apple platforms.
+  final TextStyle? buttonLabelStyle;
+
+  /// When true, applies a native blur overlay on top of the button.
+  /// Use this when a Flutter [BackdropFilter] blur is shown over the screen,
+  /// since platform views are not captured by Flutter's compositing pipeline.
+  final bool blurred;
+
   /// Whether this instance is configured as an icon button variant.
   bool get isIconButton => buttonIcon != null;
 
@@ -149,6 +167,7 @@ class _CNPopupMenuButtonState extends State<CNPopupMenuButton> {
   int? _lastIconColor;
   double? _intrinsicWidth;
   CNButtonStyle? _lastStyle;
+  bool? _lastBlurred;
   Offset? _downPosition;
   bool _pressed = false;
 
@@ -193,6 +212,9 @@ class _CNPopupMenuButtonState extends State<CNPopupMenuButton> {
                           onPressed: () => Navigator.of(ctx).pop(i),
                           child: Text(
                             (widget.items[i] as CNPopupMenuItem).label,
+                            style: (widget.items[i] as CNPopupMenuItem).labelColor != null
+                                ? TextStyle(color: (widget.items[i] as CNPopupMenuItem).labelColor)
+                                : null,
                           ),
                         )
                       else
@@ -235,6 +257,9 @@ class _CNPopupMenuButtonState extends State<CNPopupMenuButton> {
                           onPressed: () => Navigator.of(ctx).pop(i),
                           child: Text(
                             (widget.items[i] as CNPopupMenuItem).label,
+                            style: (widget.items[i] as CNPopupMenuItem).labelColor != null
+                                ? TextStyle(color: (widget.items[i] as CNPopupMenuItem).labelColor)
+                                : null,
                           ),
                         )
                       else
@@ -252,7 +277,7 @@ class _CNPopupMenuButtonState extends State<CNPopupMenuButton> {
           },
           child: widget.isIconButton
               ? Icon(CupertinoIcons.ellipsis, size: widget.buttonIcon?.size)
-              : Text(widget.buttonLabel ?? ''),
+              : Text(widget.buttonLabel ?? '', style: widget.buttonLabelStyle),
         ),
       );
     }
@@ -270,6 +295,7 @@ class _CNPopupMenuButtonState extends State<CNPopupMenuButton> {
     final modes = <String?>[];
     final palettes = <List<int?>?>[];
     final gradients = <bool?>[];
+    final labelColors = <int?>[];
     for (final e in widget.items) {
       if (e is CNPopupMenuDivider) {
         labels.add('');
@@ -282,6 +308,7 @@ class _CNPopupMenuButtonState extends State<CNPopupMenuButton> {
         modes.add(null);
         palettes.add(null);
         gradients.add(null);
+        labelColors.add(null);
       } else if (e is CNPopupMenuItem) {
         labels.add(e.label);
         symbols.add(e.icon?.name ?? '');
@@ -297,6 +324,7 @@ class _CNPopupMenuButtonState extends State<CNPopupMenuButton> {
               .toList(),
         );
         gradients.add(e.icon?.gradient);
+        labelColors.add(resolveColorToArgb(e.labelColor, context));
       }
     }
 
@@ -323,6 +351,8 @@ class _CNPopupMenuButtonState extends State<CNPopupMenuButton> {
       'sfSymbolRenderingModes': modes,
       'sfSymbolPaletteColors': palettes,
       'sfSymbolGradientEnabled': gradients,
+      'labelColors': labelColors,
+      'blurred': widget.blurred,
       'isDark': _isDark,
       'style': encodeStyle(context, tint: _effectiveTint),
       if (widget.buttonIcon?.mode != null)
@@ -445,6 +475,7 @@ class _CNPopupMenuButtonState extends State<CNPopupMenuButton> {
     _lastIconSize = widget.buttonIcon?.size;
     _lastIconColor = resolveColorToArgb(widget.buttonIcon?.color, context);
     _lastStyle = widget.buttonStyle;
+    _lastBlurred = widget.blurred;
     if (!widget.isIconButton && !widget.hasChild) {
       _requestIntrinsicSize();
     }
@@ -485,6 +516,7 @@ class _CNPopupMenuButtonState extends State<CNPopupMenuButton> {
     final updModes = <String?>[];
     final updPalettes = <List<int?>?>[];
     final updGradients = <bool?>[];
+    final updLabelColors = <int?>[];
     for (final e in widget.items) {
       if (e is CNPopupMenuDivider) {
         updLabels.add('');
@@ -497,6 +529,7 @@ class _CNPopupMenuButtonState extends State<CNPopupMenuButton> {
         updModes.add(null);
         updPalettes.add(null);
         updGradients.add(null);
+        updLabelColors.add(null);
       } else if (e is CNPopupMenuItem) {
         updLabels.add(e.label);
         updSymbols.add(e.icon?.name ?? '');
@@ -512,6 +545,7 @@ class _CNPopupMenuButtonState extends State<CNPopupMenuButton> {
               .toList(),
         );
         updGradients.add(e.icon?.gradient);
+        updLabelColors.add(resolveColorToArgb(e.labelColor, context));
       }
     }
     // Capture context-dependent values before any awaits
@@ -581,7 +615,13 @@ class _CNPopupMenuButtonState extends State<CNPopupMenuButton> {
       'sfSymbolRenderingModes': updModes,
       'sfSymbolPaletteColors': updPalettes,
       'sfSymbolGradientEnabled': updGradients,
+      'labelColors': updLabelColors,
     });
+
+    if (_lastBlurred != widget.blurred) {
+      await ch.invokeMethod('setBlur', {'blurred': widget.blurred});
+      _lastBlurred = widget.blurred;
+    }
   }
 
   Future<void> _syncBrightnessIfNeeded() async {

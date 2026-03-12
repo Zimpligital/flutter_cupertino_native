@@ -10,12 +10,14 @@ class CupertinoPopupMenuButtonNSView: NSView {
   private var dividers: [Bool] = []
   private var enabled: [Bool] = []
   private var checked: [Bool] = []
-  private var defaultSizes: [NSNumber] = []
-  private var defaultColors: [NSNumber] = []
+  private var defaultSizes: [NSNumber?] = []
+  private var defaultColors: [NSNumber?] = []
   private var defaultModes: [String?] = []
   private var defaultPalettes: [[NSNumber]] = []
   private var defaultGradients: [NSNumber?] = []
+  private var defaultLabelColors: [NSNumber?] = []
   private var isTransparentOverlay: Bool = false
+  private var blurOverlay: NSVisualEffectView?
 
   init(viewId: Int64, args: Any?, messenger: FlutterBinaryMessenger) {
     self.channel = FlutterMethodChannel(name: "CupertinoNativePopupMenuButton_\(viewId)", binaryMessenger: messenger)
@@ -35,14 +37,16 @@ class CupertinoPopupMenuButtonNSView: NSView {
     var dividers: [NSNumber] = []
     var enabled: [NSNumber] = []
     var checkedNums: [NSNumber] = []
-    var sizes: [NSNumber] = []
-    var colors: [NSNumber] = []
+    var sizes: [NSNumber?] = []
+    var colors: [NSNumber?] = []
     var buttonIconMode: String? = nil
     var buttonIconPalette: [NSNumber] = []
     var transparentOverlay: Bool = false
+    var blurred: Bool = false
 
     if let dict = args as? [String: Any] {
       if let t = dict["transparentOverlay"] as? NSNumber { transparentOverlay = t.boolValue }
+      if let b = dict["blurred"] as? NSNumber { blurred = b.boolValue }
       if let t = dict["buttonTitle"] as? String { title = t }
       if let s = dict["buttonIconName"] as? String { iconName = s }
       if let s = dict["buttonIconSize"] as? NSNumber { iconSize = CGFloat(truncating: s) }
@@ -56,13 +60,14 @@ class CupertinoPopupMenuButtonNSView: NSView {
       dividers = (dict["isDivider"] as? [NSNumber]) ?? []
       enabled = (dict["enabled"] as? [NSNumber]) ?? []
       checkedNums = (dict["checked"] as? [NSNumber]) ?? []
-      if let modes = dict["sfSymbolRenderingModes"] as? [String?] { self.defaultModes = modes }
+      self.defaultModes = Self.parseNullableStrings(dict["sfSymbolRenderingModes"])
       if let palettes = dict["sfSymbolPaletteColors"] as? [[NSNumber]] { self.defaultPalettes = palettes }
-      if let gradients = dict["sfSymbolGradientEnabled"] as? [NSNumber?] { self.defaultGradients = gradients }
+      self.defaultGradients = Self.parseNullableNumbers(dict["sfSymbolGradientEnabled"])
+      self.defaultLabelColors = Self.parseNullableNumbers(dict["labelColors"])
       if let m = dict["buttonIconRenderingMode"] as? String { buttonIconMode = m }
       if let pal = dict["buttonIconPaletteColors"] as? [NSNumber] { buttonIconPalette = pal }
-      sizes = (dict["sfSymbolSizes"] as? [NSNumber]) ?? []
-      colors = (dict["sfSymbolColors"] as? [NSNumber]) ?? []
+      sizes = Self.parseNullableNumbers(dict["sfSymbolSizes"])
+      colors = Self.parseNullableNumbers(dict["sfSymbolColors"])
     }
 
     self.isTransparentOverlay = transparentOverlay
@@ -158,6 +163,7 @@ class CupertinoPopupMenuButtonNSView: NSView {
 
     button.target = self
     button.action = #selector(onButtonPressed(_:))
+    if blurred { setBlurred(true) }
 
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self = self else { result(nil); return }
@@ -172,11 +178,12 @@ class CupertinoPopupMenuButtonNSView: NSView {
           self.dividers = ((args["isDivider"] as? [NSNumber]) ?? []).map { $0.boolValue }
           self.enabled = ((args["enabled"] as? [NSNumber]) ?? []).map { $0.boolValue }
           self.checked = ((args["checked"] as? [NSNumber]) ?? []).map { $0.boolValue }
-          self.defaultSizes = (args["sfSymbolSizes"] as? [NSNumber]) ?? []
-          self.defaultColors = (args["sfSymbolColors"] as? [NSNumber]) ?? []
-          self.defaultModes = (args["sfSymbolRenderingModes"] as? [String?]) ?? []
+          self.defaultSizes = Self.parseNullableNumbers(args["sfSymbolSizes"])
+          self.defaultColors = Self.parseNullableNumbers(args["sfSymbolColors"])
+          self.defaultModes = Self.parseNullableStrings(args["sfSymbolRenderingModes"])
           self.defaultPalettes = (args["sfSymbolPaletteColors"] as? [[NSNumber]]) ?? []
-          self.defaultGradients = (args["sfSymbolGradientEnabled"] as? [NSNumber?]) ?? []
+          self.defaultGradients = Self.parseNullableNumbers(args["sfSymbolGradientEnabled"])
+          self.defaultLabelColors = Self.parseNullableNumbers(args["labelColors"])
           self.rebuildMenu(defaultSizes: self.defaultSizes, defaultColors: self.defaultColors)
           result(nil)
         } else { result(FlutterError(code: "bad_args", message: "Missing items", details: nil)) }
@@ -261,6 +268,11 @@ class CupertinoPopupMenuButtonNSView: NSView {
           self.alphaValue = p.boolValue ? 0.7 : 1.0
           result(nil)
         } else { result(FlutterError(code: "bad_args", message: "Missing pressed", details: nil)) }
+      case "setBlur":
+        if let args = call.arguments as? [String: Any],
+           let b = (args["blurred"] as? NSNumber)?.boolValue {
+          self.setBlurred(b); result(nil)
+        } else { result(FlutterError(code: "bad_args", message: "Missing blurred", details: nil)) }
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -269,12 +281,33 @@ class CupertinoPopupMenuButtonNSView: NSView {
 
   required init?(coder: NSCoder) { return nil }
 
+  override func layout() {
+    super.layout()
+    blurOverlay?.frame = bounds
+  }
+
+  private func setBlurred(_ blurred: Bool) {
+    if blurred {
+      guard blurOverlay == nil else { return }
+      let overlay = NSVisualEffectView(frame: bounds)
+      overlay.autoresizingMask = [.width, .height]
+      overlay.material = .sheet
+      overlay.blendingMode = .withinWindow
+      overlay.state = .active
+      addSubview(overlay)
+      blurOverlay = overlay
+    } else {
+      blurOverlay?.removeFromSuperview()
+      blurOverlay = nil
+    }
+  }
+
   @objc private func onButtonPressed(_ sender: NSButton) {
     let location = NSPoint(x: 0, y: sender.bounds.height)
     popupMenu.popUp(positioning: nil, at: location, in: sender)
   }
 
-  private func rebuildMenu(defaultSizes: [NSNumber]? = nil, defaultColors: [NSNumber]? = nil) {
+  private func rebuildMenu(defaultSizes: [NSNumber?]? = nil, defaultColors: [NSNumber?]? = nil) {
     popupMenu = NSMenu()
     popupMenu.autoenablesItems = false
     let count = max(labels.count, max(symbols.count, max(dividers.count, max(enabled.count, checked.count))))
@@ -290,10 +323,13 @@ class CupertinoPopupMenuButtonNSView: NSView {
       let isEnabled = i < enabled.count ? enabled[i] : true
       mi.isEnabled = isEnabled
       if i < checked.count { mi.state = checked[i] ? .on : .off }
+
+      // Build the SF Symbol image (if any) first so it can be used in either path
+      var finalImage: NSImage? = nil
       if i < symbols.count, !symbols[i].isEmpty {
         if var img = NSImage(systemSymbolName: symbols[i], accessibilityDescription: nil) {
-          if #available(macOS 12.0, *), let sizes = defaultSizes, i < sizes.count {
-            let s = CGFloat(truncating: sizes[i])
+          if #available(macOS 12.0, *), let sizes = defaultSizes, i < sizes.count, let sn = sizes[i] {
+            let s = CGFloat(truncating: sn)
             if s > 0 {
               let cfg = NSImage.SymbolConfiguration(pointSize: s, weight: .regular)
               img = img.withSymbolConfiguration(cfg) ?? img
@@ -302,8 +338,8 @@ class CupertinoPopupMenuButtonNSView: NSView {
           if #available(macOS 12.0, *), i < defaultModes.count, let mode = defaultModes[i] {
             switch mode {
             case "hierarchical":
-              if let colors = defaultColors, i < colors.count {
-                let c = Self.colorFromARGB(colors[i].intValue)
+              if let colors = defaultColors, i < colors.count, let cn = colors[i] {
+                let c = Self.colorFromARGB(cn.intValue)
                 let cfg = NSImage.SymbolConfiguration(hierarchicalColor: c)
                 img = img.withSymbolConfiguration(cfg) ?? img
               }
@@ -317,27 +353,112 @@ class CupertinoPopupMenuButtonNSView: NSView {
               let cfg = NSImage.SymbolConfiguration.preferringMulticolor()
               img = img.withSymbolConfiguration(cfg) ?? img
             case "monochrome":
-              if let colors = defaultColors, i < colors.count {
-                let c = Self.colorFromARGB(colors[i].intValue)
+              if let colors = defaultColors, i < colors.count, let cn = colors[i] {
+                let c = Self.colorFromARGB(cn.intValue)
                 img = img.tinted(with: c)
               }
             default:
               break
             }
-          } else if #available(macOS 12.0, *), let colors = defaultColors, i < colors.count {
-            let c = Self.colorFromARGB(colors[i].intValue)
+          } else if #available(macOS 12.0, *), let colors = defaultColors, i < colors.count, let cn = colors[i] {
+            let c = Self.colorFromARGB(cn.intValue)
             let cfg = NSImage.SymbolConfiguration(hierarchicalColor: c)
             img = img.withSymbolConfiguration(cfg) ?? img
           }
-          mi.image = img
+          finalImage = img
         }
       }
+
+      // Use a custom view for colored labels (NSMenuItem.attributedTitle foreground
+      // color is not reliably respected on macOS 14+); fall back to standard image.
+      if i < defaultLabelColors.count, let lc = defaultLabelColors[i] {
+        let color = Self.colorFromARGB(lc.intValue)
+        mi.view = ColoredMenuItemView(title: title, color: color, image: finalImage)
+      } else {
+        if let img = finalImage { mi.image = img }
+      }
+
       popupMenu.addItem(mi)
     }
   }
 
   @objc private func onSelectMenuItem(_ sender: NSMenuItem) {
     channel.invokeMethod("itemSelected", arguments: ["index": sender.tag])
+  }
+
+  // Custom view for menu items that need a specific label color.
+  // NSMenuItem.attributedTitle foreground color is not reliably respected on macOS 14+,
+  // so we use NSMenuItem.view with a lightweight NSView instead.
+  private class ColoredMenuItemView: NSView {
+    private let label: NSTextField
+    private let iconView: NSImageView
+    private let customColor: NSColor
+
+    init(title: String, color: NSColor, image: NSImage?) {
+      self.customColor = color
+      self.label = NSTextField(labelWithString: title)
+      self.iconView = NSImageView()
+      // Non-zero height so NSMenu can determine the item height from the frame.
+      super.init(frame: NSRect(x: 0, y: 0, width: 0, height: 22))
+
+      let hasIcon = image != nil
+      let iconSize: CGFloat = 16
+      let leading: CGFloat = 18
+
+      if let img = image {
+        iconView.image = img
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(iconView)
+      }
+
+      label.font = NSFont.menuFont(ofSize: 0)
+      label.textColor = color
+      label.isBordered = false
+      label.isEditable = false
+      label.drawsBackground = false
+      label.translatesAutoresizingMaskIntoConstraints = false
+      addSubview(label)
+
+      var constraints: [NSLayoutConstraint] = [
+        label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        trailingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 18),
+      ]
+      if hasIcon {
+        constraints += [
+          iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: leading),
+          iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+          iconView.widthAnchor.constraint(equalToConstant: iconSize),
+          iconView.heightAnchor.constraint(equalToConstant: iconSize),
+          label.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 6),
+        ]
+      } else {
+        constraints.append(label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: leading + iconSize + 6))
+      }
+      NSLayoutConstraint.activate(constraints)
+    }
+
+    required init?(coder: NSCoder) { return nil }
+
+    private func updateColors() {
+      let highlighted = enclosingMenuItem?.isHighlighted == true
+      label.textColor = highlighted ? .selectedMenuItemTextColor : customColor
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+      updateColors()
+      super.draw(dirtyRect)
+    }
+  }
+
+  private static func parseNullableNumbers(_ value: Any?) -> [NSNumber?] {
+    guard let arr = value as? [Any] else { return [] }
+    return arr.map { $0 is NSNull ? nil : $0 as? NSNumber }
+  }
+
+  private static func parseNullableStrings(_ value: Any?) -> [String?] {
+    guard let arr = value as? [Any] else { return [] }
+    return arr.map { $0 is NSNull ? nil : $0 as? String }
   }
 
   private static func colorFromARGB(_ argb: Int) -> NSColor {

@@ -8,13 +8,44 @@ import '../style/sf_symbol.dart';
 /// Immutable data describing a single tab bar item.
 class CNTabBarItem {
   /// Creates a tab bar item description.
-  const CNTabBarItem({this.label, this.icon});
+  const CNTabBarItem({
+    this.label,
+    this.icon,
+    this.badge,
+    this.activeIcon,
+    this.inactiveIcon,
+    this.activeColor,
+    this.inactiveColor,
+    this.activeTextColor,
+    this.inactiveTextColor,
+  });
 
   /// Optional tab item label.
   final String? label;
 
-  /// Optional SF Symbol for the item.
+  /// Optional SF Symbol for the item. Used as fallback for [activeIcon] and [inactiveIcon].
   final CNSymbol? icon;
+
+  /// Optional badge number shown with a red background on the item.
+  final int? badge;
+
+  /// Icon shown when this item is selected. Overrides [icon] when active.
+  final CNSymbol? activeIcon;
+
+  /// Icon shown when this item is not selected. Overrides [icon] when inactive.
+  final CNSymbol? inactiveIcon;
+
+  /// Color applied to the icon when this item is selected.
+  final Color? activeColor;
+
+  /// Color applied to the icon when this item is not selected.
+  final Color? inactiveColor;
+
+  /// Color applied to the label text when this item is selected. Overrides [activeColor] for text.
+  final Color? activeTextColor;
+
+  /// Color applied to the label text when this item is not selected. Overrides [inactiveColor] for text.
+  final Color? inactiveTextColor;
 }
 
 /// A Cupertino-native tab bar. Uses native UITabBar/NSTabView style visuals.
@@ -33,6 +64,7 @@ class CNTabBar extends StatefulWidget {
     this.rightCount = 1,
     this.shrinkCentered = true,
     this.splitSpacing = 8.0,
+    this.blurred = false,
   });
 
   /// Items to display in the tab bar.
@@ -67,6 +99,11 @@ class CNTabBar extends StatefulWidget {
   /// Gap between left/right halves when split.
   final double splitSpacing; // gap between left/right halves when split
 
+  /// When true, applies a native blur overlay on top of the bar.
+  /// Use this when a Flutter [BackdropFilter] blur is shown over the screen,
+  /// since platform views are not captured by Flutter's compositing pipeline.
+  final bool blurred;
+
   @override
   State<CNTabBar> createState() => _CNTabBarState();
 }
@@ -80,10 +117,13 @@ class _CNTabBarState extends State<CNTabBar> {
   double? _intrinsicHeight;
   double? _intrinsicWidth;
   List<String>? _lastLabels;
-  List<String>? _lastSymbols;
+  List<String>? _lastActiveSymbols;
+  List<String>? _lastInactiveSymbols;
+  List<int?>? _lastBadges;
   bool? _lastSplit;
   int? _lastRightCount;
   double? _lastSplitSpacing;
+  bool? _lastBlurred;
 
   bool get _isDark => CupertinoTheme.of(context).brightness == Brightness.dark;
   Color? get _effectiveTint =>
@@ -126,19 +166,43 @@ class _CNTabBarState extends State<CNTabBar> {
     }
 
     final labels = widget.items.map((e) => e.label ?? '').toList();
-    final symbols = widget.items.map((e) => e.icon?.name ?? '').toList();
+    final activeSymbols = widget.items
+        .map((e) => (e.activeIcon ?? e.icon)?.name ?? '')
+        .toList();
+    final inactiveSymbols = widget.items
+        .map((e) => (e.inactiveIcon ?? e.icon)?.name ?? '')
+        .toList();
     final sizes = widget.items
         .map((e) => (widget.iconSize ?? e.icon?.size))
         .toList();
-    final colors = widget.items
-        .map((e) => resolveColorToArgb(e.icon?.color, context))
+    final activeColors = widget.items
+        .map((e) => resolveColorToArgb(e.activeColor ?? e.icon?.color, context))
         .toList();
+    final inactiveColors = widget.items
+        .map((e) => resolveColorToArgb(e.inactiveColor ?? e.icon?.color, context))
+        .toList();
+    final activeTextColors = widget.items
+        .map((e) => resolveColorToArgb(
+            e.activeTextColor ?? e.activeColor ?? e.icon?.color, context))
+        .toList();
+    final inactiveTextColors = widget.items
+        .map((e) => resolveColorToArgb(
+            e.inactiveTextColor ?? e.inactiveColor ?? e.icon?.color, context))
+        .toList();
+    final badges = widget.items.map((e) => e.badge).toList();
 
     final creationParams = <String, dynamic>{
       'labels': labels,
-      'sfSymbols': symbols,
+      'sfSymbols': activeSymbols,
       'sfSymbolSizes': sizes,
-      'sfSymbolColors': colors,
+      'sfSymbolColors': activeColors,
+      'activeSymbols': activeSymbols,
+      'inactiveSymbols': inactiveSymbols,
+      'activeColors': activeColors,
+      'inactiveColors': inactiveColors,
+      'activeTextColors': activeTextColors,
+      'inactiveTextColors': inactiveTextColors,
+      'badges': badges,
       'selectedIndex': widget.currentIndex,
       'isDark': _isDark,
       'split': widget.split,
@@ -152,6 +216,7 @@ class _CNTabBarState extends State<CNTabBar> {
               context,
             ),
         }),
+      'blurred': widget.blurred,
     };
 
     final viewType = 'CupertinoNativeTabBar';
@@ -186,10 +251,12 @@ class _CNTabBarState extends State<CNTabBar> {
     _lastBg = resolveColorToArgb(widget.backgroundColor, context);
     _lastIsDark = _isDark;
     _requestIntrinsicSize();
-    _cacheItems();
+    _cacheItems(context);
+    _lastBadges = widget.items.map((e) => e.badge).toList();
     _lastSplit = widget.split;
     _lastRightCount = widget.rightCount;
     _lastSplitSpacing = widget.splitSpacing;
+    _lastBlurred = widget.blurred;
   }
 
   Future<dynamic> _onMethodCall(MethodCall call) async {
@@ -231,18 +298,54 @@ class _CNTabBarState extends State<CNTabBar> {
 
     // Items update (for hot reload or dynamic changes)
     final labels = widget.items.map((e) => e.label ?? '').toList();
-    final symbols = widget.items.map((e) => e.icon?.name ?? '').toList();
+    final activeSymbols = widget.items
+        .map((e) => (e.activeIcon ?? e.icon)?.name ?? '')
+        .toList();
+    final inactiveSymbols = widget.items
+        .map((e) => (e.inactiveIcon ?? e.icon)?.name ?? '')
+        .toList();
+    final activeColors = widget.items
+        .map((e) => resolveColorToArgb(e.activeColor ?? e.icon?.color, context))
+        .toList();
+    final inactiveColors = widget.items
+        .map((e) => resolveColorToArgb(e.inactiveColor ?? e.icon?.color, context))
+        .toList();
+    final activeTextColors = widget.items
+        .map((e) => resolveColorToArgb(
+            e.activeTextColor ?? e.activeColor ?? e.icon?.color, context))
+        .toList();
+    final inactiveTextColors = widget.items
+        .map((e) => resolveColorToArgb(
+            e.inactiveTextColor ?? e.inactiveColor ?? e.icon?.color, context))
+        .toList();
     if (_lastLabels?.join('|') != labels.join('|') ||
-        _lastSymbols?.join('|') != symbols.join('|')) {
+        _lastActiveSymbols?.join('|') != activeSymbols.join('|') ||
+        _lastInactiveSymbols?.join('|') != inactiveSymbols.join('|')) {
       await ch.invokeMethod('setItems', {
         'labels': labels,
-        'sfSymbols': symbols,
+        'sfSymbols': activeSymbols,
+        'activeSymbols': activeSymbols,
+        'inactiveSymbols': inactiveSymbols,
+        'activeColors': activeColors,
+        'inactiveColors': inactiveColors,
+        'activeTextColors': activeTextColors,
+        'inactiveTextColors': inactiveTextColors,
         'selectedIndex': widget.currentIndex,
       });
       _lastLabels = labels;
-      _lastSymbols = symbols;
+      _lastActiveSymbols = activeSymbols;
+      _lastInactiveSymbols = inactiveSymbols;
       // Re-measure width in case content changed
       _requestIntrinsicSize();
+    }
+
+    // Badge updates
+    final badges = widget.items.map((e) => e.badge).toList();
+    final lastBadgesStr = _lastBadges?.map((b) => '${b ?? ""}').join('|');
+    final badgesStr = badges.map((b) => '${b ?? ""}').join('|');
+    if (lastBadgesStr != badgesStr) {
+      await ch.invokeMethod('setBadges', {'badges': badges});
+      _lastBadges = badges;
     }
 
     // Layout updates (split / insets)
@@ -259,6 +362,11 @@ class _CNTabBarState extends State<CNTabBar> {
       _lastRightCount = widget.rightCount;
       _lastSplitSpacing = widget.splitSpacing;
       _requestIntrinsicSize();
+    }
+
+    if (_lastBlurred != widget.blurred) {
+      await ch.invokeMethod('setBlur', {'blurred': widget.blurred});
+      _lastBlurred = widget.blurred;
     }
   }
 
@@ -279,9 +387,14 @@ class _CNTabBarState extends State<CNTabBar> {
     }
   }
 
-  void _cacheItems() {
+  void _cacheItems(BuildContext context) {
     _lastLabels = widget.items.map((e) => e.label ?? '').toList();
-    _lastSymbols = widget.items.map((e) => e.icon?.name ?? '').toList();
+    _lastActiveSymbols = widget.items
+        .map((e) => (e.activeIcon ?? e.icon)?.name ?? '')
+        .toList();
+    _lastInactiveSymbols = widget.items
+        .map((e) => (e.inactiveIcon ?? e.icon)?.name ?? '')
+        .toList();
   }
 
   Future<void> _requestIntrinsicSize() async {

@@ -23,12 +23,21 @@ class _PopupMenuButtonDemoPageState extends State<PopupMenuButtonDemoPage> {
       const CNPopupMenuDivider(),
       CNPopupMenuItem(
         label: 'Rename',
-        icon: const CNSymbol('rectangle.and.pencil.and.ellipsis', size: 18),
+        icon: const CNSymbol(
+          'rectangle.and.pencil.and.ellipsis',
+          size: 18,
+          color: CupertinoColors.systemBlue,
+        ),
+        labelColor: CupertinoColors.systemBlue,
       ),
       CNPopupMenuItem(
         label: 'Delete',
-        icon: const CNSymbol('trash', size: 18),
-        enabled: false,
+        icon: const CNSymbol(
+          'trash',
+          size: 18,
+          color: CupertinoColors.systemRed,
+        ),
+        labelColor: CupertinoColors.systemRed,
       ),
     ];
 
